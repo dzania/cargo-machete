@@ -1,0 +1,7 @@
+[workspace]
+members = ["./first", "./second"]
+exclude = ["./excluded"]
+resolver = "2"
+
+[workspace.dependencies]
+log = "0.4.14"

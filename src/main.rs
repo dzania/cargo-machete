@@ -4,9 +4,8 @@ mod search_unused;
 use crate::printers::json::JsonPrinter;
 use crate::printers::stdout::StdoutPrinter;
 use crate::printers::{AnalyzedPaths, Printer};
-use crate::search_unused::find_unused;
+use crate::search_unused::{MetadataCache, find_unused};
 use anyhow::{Context, bail};
-use rayon::prelude::*;
 use std::path::Path;
 use std::str::FromStr;
 use std::{fs, path::PathBuf};
@@ -21,15 +20,16 @@ use toml_edit::{KeyMut, TableLike};
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[derive(Clone, Copy)]
-pub(crate) enum UseCargoMetadata {
-    Yes,
+pub(crate) enum UseCargoMetadata<'a> {
+    /// Run `cargo metadata`, sharing its results through the given cache.
+    Yes(&'a MetadataCache),
     No,
 }
 
 #[cfg(test)]
-impl UseCargoMetadata {
-    fn all() -> &'static [Self] {
-        &[Self::Yes, Self::No]
+impl<'a> UseCargoMetadata<'a> {
+    fn all(cache: &'a MetadataCache) -> [Self; 2] {
+        [Self::Yes(cache), Self::No]
     }
 }
 
@@ -176,6 +176,9 @@ fn run_machete() -> anyhow::Result<bool> {
     // can run analysis for paths which didn't cause errors.
     let mut path_collection_errors = Vec::new();
 
+    // Shared by all the paths, since several of them may be part of the same workspace.
+    let metadata_cache = MetadataCache::default();
+
     for path in args.paths {
         let manifest_path_entries = match collect_paths(
             &path,
@@ -193,39 +196,37 @@ fn run_machete() -> anyhow::Result<bool> {
         };
 
         let with_metadata = if args.with_metadata {
-            UseCargoMetadata::Yes
+            UseCargoMetadata::Yes(&metadata_cache)
         } else {
             UseCargoMetadata::No
         };
 
-        // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
-        // used by any Rust crate.
-        let results = manifest_path_entries
-            .par_iter()
-            .filter_map(
-                |manifest_path| match find_unused(manifest_path, with_metadata) {
-                    Ok(Some(analysis)) => {
-                        if analysis.unused.is_empty() {
-                            None
-                        } else {
-                            Some((analysis, manifest_path))
-                        }
-                    }
-
-                    Ok(None) => {
-                        log::info!(
-                            "{} is a virtual manifest for a workspace",
-                            manifest_path.to_string_lossy()
-                        );
+        // Run analysis in parallel.
+        let results = find_unused(&manifest_path_entries, with_metadata)
+            .into_iter()
+            .zip(&manifest_path_entries)
+            .filter_map(|(result, manifest_path)| match result {
+                Ok(Some(analysis)) => {
+                    if analysis.unused.is_empty() {
                         None
+                    } else {
+                        Some((analysis, manifest_path))
                     }
+                }
 
-                    Err(err) => {
-                        eprintln!("error when handling {}: {:#}", manifest_path.display(), err);
-                        None
-                    }
-                },
-            )
+                Ok(None) => {
+                    log::info!(
+                        "{} is a virtual manifest for a workspace",
+                        manifest_path.to_string_lossy()
+                    );
+                    None
+                }
+
+                Err(err) => {
+                    eprintln!("error when handling {}: {:#}", manifest_path.display(), err);
+                    None
+                }
+            })
             .collect::<Vec<_>>();
 
         has_unused_dependencies = has_unused_dependencies || !results.is_empty();
