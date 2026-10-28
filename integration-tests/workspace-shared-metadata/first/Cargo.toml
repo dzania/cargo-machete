@@ -1,0 +1,8 @@
+[package]
+name = "first"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log.workspace = true
+rng = { package = "rand", version = "0.8.5" }

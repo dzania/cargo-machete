@@ -72,6 +72,7 @@ dependencies = [
 name = "cargo-machete"
 version = "0.9.2"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "argh",
  "cargo_metadata",
@@ -79,6 +80,7 @@ dependencies = [
  "grep",
  "ignore",
  "log",
+ "memchr",
  "pretty_env_logger",
  "rayon",
  "serde",
